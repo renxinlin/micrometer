@@ -100,6 +100,7 @@ public class TomcatMetrics implements MeterBinder, AutoCloseable {
 
     @Override
     public void bindTo(MeterRegistry registry) {
+        // 请求相关度量注册MeterRegistry[先注册micrometer,PrometheusMeterRegistry，后注册prometheus的CollectorRegistry]
         registerGlobalRequestMetrics(registry);
         registerServletMetrics(registry);
         registerCacheMetrics(registry);

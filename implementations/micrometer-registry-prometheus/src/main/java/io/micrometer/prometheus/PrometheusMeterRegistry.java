@@ -59,7 +59,14 @@ public class PrometheusMeterRegistry extends MeterRegistry {
     private final PrometheusConfig prometheusConfig;
 
     private final CollectorRegistry registry;
-
+    /**                 -- Gauge
+                        -- Histogram
+     * export-collector -- Summary
+     *                  -- Counter
+     *                  -- SimpleCollector
+     *                  -()
+     * 适配prometheus的collector
+     */
     private final ConcurrentMap<String, MicrometerCollector> collectorMap = new ConcurrentHashMap<>();
 
     @Nullable
@@ -194,13 +201,20 @@ public class PrometheusMeterRegistry extends MeterRegistry {
     @Override
     public Counter newCounter(Meter.Id id) {
         PrometheusCounter counter = new PrometheusCounter(id, exemplarSampler);
-        applyToCollector(id, (collector) -> {
-            List<String> tagValues = tagValues(id);
-            collector.add(tagValues,
-                    (conventionName,
-                            tagKeys) -> Stream.of(new MicrometerCollector.Family(Collector.Type.COUNTER, conventionName,
-                                    new Collector.MetricFamilySamples.Sample(conventionName, tagKeys, tagValues,
-                                            counter.count(), counter.exemplar()))));
+        applyToCollector(id, new Consumer<MicrometerCollector>() {
+            @Override
+            public void accept(MicrometerCollector collector) {
+                List<String> tagValues = tagValues(id);
+                collector.add(tagValues,
+                        new MicrometerCollector.Child() {
+                            @Override
+                            public Stream<MicrometerCollector.Family> samples(String conventionName, List<String> tagKeys) {
+                                return Stream.of(new MicrometerCollector.Family(Collector.Type.COUNTER, conventionName,
+                                        new Collector.MetricFamilySamples.Sample(conventionName, tagKeys, tagValues,
+                                                counter.count(), counter.exemplar())));
+                            }
+                        });
+            }
         });
         return counter;
     }
@@ -549,28 +563,31 @@ public class PrometheusMeterRegistry extends MeterRegistry {
     }
 
     private void applyToCollector(Meter.Id id, Consumer<MicrometerCollector> consumer) {
-        collectorMap.compute(getConventionName(id), (name, existingCollector) -> {
-            if (existingCollector == null) {
-                MicrometerCollector micrometerCollector = new MicrometerCollector(id, config().namingConvention(),
-                        prometheusConfig);
-                consumer.accept(micrometerCollector);
-                return micrometerCollector.register(registry);
-            }
+        collectorMap.compute(getConventionName(id), new BiFunction<String, MicrometerCollector, MicrometerCollector>() {
+            @Override
+            public MicrometerCollector apply(String name, MicrometerCollector existingCollector) {
+                if (existingCollector == null) {
+                    MicrometerCollector micrometerCollector = new MicrometerCollector(id, PrometheusMeterRegistry.this.config().namingConvention(),
+                            prometheusConfig);
+                    consumer.accept(micrometerCollector);
+                    return micrometerCollector.register(registry);
+                }
 
-            List<String> tagKeys = getConventionTags(id).stream().map(Tag::getKey).collect(toList());
-            if (existingCollector.getTagKeys().equals(tagKeys)) {
-                consumer.accept(existingCollector);
+                List<String> tagKeys = PrometheusMeterRegistry.this.getConventionTags(id).stream().map(Tag::getKey).collect(toList());
+                if (existingCollector.getTagKeys().equals(tagKeys)) {
+                    consumer.accept(existingCollector);
+                    return existingCollector;
+                }
+
+                PrometheusMeterRegistry.this.meterRegistrationFailed(id,
+                        "Prometheus requires that all meters with the same name have the same"
+                                + " set of tag keys. There is already an existing meter named '" + id.getName()
+                                + "' containing tag keys ["
+                                + String.join(", ", collectorMap.get(PrometheusMeterRegistry.this.getConventionName(id)).getTagKeys())
+                                + "]. The meter you are attempting to register" + " has keys ["
+                                + PrometheusMeterRegistry.this.getConventionTags(id).stream().map(Tag::getKey).collect(joining(", ")) + "].");
                 return existingCollector;
             }
-
-            meterRegistrationFailed(id,
-                    "Prometheus requires that all meters with the same name have the same"
-                            + " set of tag keys. There is already an existing meter named '" + id.getName()
-                            + "' containing tag keys ["
-                            + String.join(", ", collectorMap.get(getConventionName(id)).getTagKeys())
-                            + "]. The meter you are attempting to register" + " has keys ["
-                            + getConventionTags(id).stream().map(Tag::getKey).collect(joining(", ")) + "].");
-            return existingCollector;
         });
     }
 

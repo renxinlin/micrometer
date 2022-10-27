@@ -296,7 +296,7 @@ public abstract class MeterRegistry {
      * @return A new or existing counter.
      */
     Counter counter(Meter.Id id) {
-        return registerMeterIfNecessary(Counter.class, id, this::newCounter, NoopCounter::new);
+        return registerMeterIfNecessary(Counter.class, id, this::newCounter/*会将 Collector与prometheus的CollectorRegister完成注册 */, NoopCounter::new);
     }
 
     /**
